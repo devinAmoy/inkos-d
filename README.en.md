@@ -23,9 +23,41 @@
 
 Open-source multi-agent system that autonomously writes, audits, and revises novels — with human review gates that keep you in control.
 
-## v0.3 Update (2026-03-13)
+## v0.3 Update
 
-Three-layer rule separation: core guardrails → genre-specific rules → per-book custom rules.
+Three-layer rule separation + cross-chapter memory + AIGC detection + Webhook.
+
+### Cross-Chapter Memory & Writing Quality
+
+The Writer auto-generates chapter summaries, updates subplot/emotion/character matrices — all appended to truth files. Subsequent chapters load full context, so long-term foreshadowing never gets lost.
+
+| Truth File | Purpose |
+|------------|---------|
+| `chapter_summaries.md` | Per-chapter summaries: characters, key events, state changes, hook dynamics |
+| `subplot_board.md` | Subplot progress board: A/B/C line status tracking |
+| `emotional_arcs.md` | Emotional arcs: per-character emotion, triggers, arc direction |
+| `character_matrix.md` | Character interaction matrix: encounter records, information boundaries |
+
+### AIGC Detection
+
+| Feature | Description |
+|---------|-------------|
+| AI-Tell Audit | Pure rule-based detection (no LLM): paragraph uniformity, hedge word density, formulaic transitions, list-like structure — auto-merged into audit results |
+| AIGC Detection API | External API integration (GPTZero / Originality / custom endpoints), `inkos detect` command |
+| Style Fingerprint | Extract StyleProfile from reference text (sentence length, TTR, rhetorical features), inject into Writer prompt |
+| Anti-Detect Rewrite | ReviserAgent `anti-detect` mode, detect → rewrite → re-detect loop |
+| Detection Feedback Loop | `detection_history.json` records each detection/rewrite result, `inkos detect --stats` for statistics |
+
+```bash
+inkos style analyze reference.txt           # Analyze reference text style
+inkos style import reference.txt my-book    # Import style into book
+inkos detect my-book --all                  # Detect all chapters
+inkos detect --stats                        # Detection statistics
+```
+
+### Webhook + Smart Scheduler
+
+Pipeline events POST JSON to configured URLs (HMAC-SHA256 signed), with event filtering (`chapter-complete`, `audit-failed`, `pipeline-error`, etc.). Daemon mode adds quality gates: auto-retry on audit failure (with temperature ramp), pause book after consecutive failures.
 
 ### Genre Customization
 
@@ -83,13 +115,13 @@ fatigueWordsOverride: ["pupils constricted", "disbelief"]   # Override genre def
 
 Protagonist personality lock, numerical caps, custom prohibitions, fatigue word overrides — each book's rules are independent, without affecting the genre template.
 
-### 19-Dimension Audit
+### 26-Dimension Audit
 
-Auditing is broken down into 19 dimensions, with genre-appropriate subsets auto-enabled:
+Auditing is broken down into 26 dimensions, with genre-appropriate subsets auto-enabled:
 
-OOC check, timeline, setting conflicts, foreshadowing, pacing, writing style, information leaking, vocabulary fatigue, broken interest chains, side character intelligence drops, side character tool-ification, hollow payoffs, dialogue authenticity, padding detection, knowledge base contamination, POV consistency, power scaling collapse, numerical verification, era research
+OOC check, timeline, setting conflicts, foreshadowing, pacing, writing style, information leaking, vocabulary fatigue, broken interest chains, side character intelligence drops, side character tool-ification, hollow payoffs, dialogue authenticity, padding detection, knowledge base contamination, POV consistency, power scaling collapse, numerical verification, era research, paragraph uniformity, hedge word density, formulaic transitions, list-like structure, subplot stagnation, flat emotional arc, monotonous pacing
 
-Xuanhuan/Xianxia: all 19 dimensions. Urban: 17 dimensions (including era research). Horror: 15 dimensions.
+Xuanhuan/Xianxia: all 26 dimensions. Urban: 24 dimensions (including era research). Horror: 22 dimensions. Dims 20-23 (AI-tell detection) use a pure rule engine — no LLM calls consumed.
 
 ### De-AI-ification
 
@@ -101,12 +133,12 @@ Xuanhuan/Xianxia: all 19 dimensions. Urban: 17 dimensions (including era researc
 - Same imagery rendered no more than twice
 - Methodology jargon stays out of prose
 
-Vocabulary fatigue audit simultaneously checks marker word density — exceeding threshold triggers a warning.
+Vocabulary fatigue audit + AI-tell audit (dims 20-23) provide dual detection. Style fingerprint injection further reduces AI text characteristics.
 
 ### Other
 
 - Supports OpenAI + Anthropic native + all OpenAI-compatible endpoints
-- Reviser supports polish / rewrite / rework modes
+- Reviser supports polish / rewrite / rework / anti-detect modes
 - Genres without numerical systems skip resource ledger generation
 - All commands support `--json` structured output for OpenClaw / external agent integration
 - Auto-detect book-id when project has only one book
@@ -145,15 +177,19 @@ If the audit fails, the pipeline automatically enters a revise → re-audit loop
 
 ### Canonical Truth Files
 
-Every book maintains three files as the single source of truth:
+Every book maintains 7 truth files as the single source of truth:
 
 | File | Purpose |
 |------|---------|
 | `current_state.md` | World state: character locations, relationships, knowledge, emotional arcs |
 | `particle_ledger.md` | Resource accounting: items, money, supplies with quantities and decay tracking |
 | `pending_hooks.md` | Open plot threads: foreshadowing planted, promises to readers, unresolved conflicts |
+| `chapter_summaries.md` | Per-chapter summaries: characters, key events, state changes, hook dynamics |
+| `subplot_board.md` | Subplot progress board: A/B/C line status tracking |
+| `emotional_arcs.md` | Emotional arcs: per-character emotion tracking and growth |
+| `character_matrix.md` | Character interaction matrix: encounter records, information boundaries |
 
-The Continuity Auditor checks every draft against these files. If a character "remembers" something they never witnessed, or pulls a weapon they lost two chapters ago, the auditor catches it.
+The Continuity Auditor checks every draft against these files. If a character "remembers" something they never witnessed, or pulls a weapon they lost two chapters ago, the auditor catches it. Legacy books without new truth files are automatically compatible.
 
 <p align="center">
   <img src="assets/screenshot-state.png" width="800" alt="Truth files snapshot">
@@ -280,6 +316,9 @@ inkos up                          # Daemon mode
 | `inkos config show-global` | Show global config |
 | `inkos config set/show` | View/update project config |
 | `inkos doctor` | Diagnose setup issues (includes API connectivity test) |
+| `inkos detect [id] [n]` | AIGC detection (`--all` for all chapters, `--stats` for statistics) |
+| `inkos style analyze <file>` | Analyze reference text to extract style fingerprint |
+| `inkos style import <file> [id]` | Import style fingerprint into a book |
 | `inkos update` | Update to latest version |
 | `inkos up / down` | Start/stop daemon |
 
@@ -309,7 +348,7 @@ Radar data sources are pluggable via the `RadarSource` interface. Built-in sourc
 
 ### Notifications
 
-Telegram, Feishu, and WeCom. In daemon mode, get notified on your phone when a chapter is done or an audit fails.
+Telegram, Feishu, WeCom, and Webhook. In daemon mode, get notified on your phone when a chapter is done or an audit fails. Webhook supports HMAC-SHA256 signing and event filtering.
 
 ### External Agent Integration
 
@@ -321,14 +360,14 @@ Atomic commands + `--json` output make InkOS callable by OpenClaw and other AI a
 inkos/
 ├── packages/
 │   ├── core/              # Agent runtime, pipeline, state management
-│   │   ├── agents/        # architect, writer, continuity, reviser, radar
-│   │   ├── pipeline/      # runner (atomic ops + full pipeline), agent (tool-use), scheduler
-│   │   ├── state/         # File-based state manager
+│   │   ├── agents/        # architect, writer, continuity, reviser, radar, ai-tells, detector, style-analyzer
+│   │   ├── pipeline/      # runner, agent (tool-use), scheduler, detection-runner
+│   │   ├── state/         # File-based state manager (7 truth files + snapshots)
 │   │   ├── llm/           # OpenAI + Anthropic dual SDK (streaming)
-│   │   ├── notify/        # Telegram, Feishu, WeCom
+│   │   ├── notify/        # Telegram, Feishu, WeCom, Webhook
 │   │   └── models/        # Zod schema validation
-│   └── cli/               # Commander.js CLI (16 commands)
-│       └── commands/      # init, book, write, draft, audit, revise, agent, review, status, export...
+│   └── cli/               # Commander.js CLI (18 commands)
+│       └── commands/      # init, book, write, draft, audit, revise, agent, review, detect, style...
 └── (planned) studio/      # Web UI for review and editing
 ```
 
@@ -339,7 +378,7 @@ TypeScript monorepo managed with pnpm workspaces.
 - [x] Full pipeline (radar → architect → writer → auditor → reviser)
 - [x] Canonical truth files + continuity audit
 - [x] Built-in writing rule system
-- [x] Full CLI (16 commands)
+- [x] Full CLI (18 commands)
 - [x] State snapshots + chapter rewrite
 - [x] Daemon mode
 - [x] Notifications (Telegram / Feishu / WeCom)
@@ -348,10 +387,12 @@ TypeScript monorepo managed with pnpm workspaces.
 - [x] Pluggable radar (RadarSource interface)
 - [x] External agent integration (OpenClaw, etc.)
 - [x] Genre customization + per-book rules (genre CLI + book_rules.md)
-- [x] 19-dimension continuity audit
-- [x] De-AI-ification rules
+- [x] 26-dimension continuity audit (including AI-tell detection)
+- [x] De-AI-ification rules + style fingerprint injection
 - [x] Multi-LLM provider (OpenAI + Anthropic + compatible endpoints)
-- [ ] AI detection review (AIGC detection + auto-rewrite to reduce detection rate)
+- [x] AIGC detection + anti-detect rewrite pipeline
+- [x] Webhook notifications + smart scheduler (quality gates)
+- [x] Cross-chapter coherence (chapter summaries + subplot/emotion/character matrices)
 - [ ] `packages/studio` Web UI for review and editing
 - [ ] Multi-model routing (different models for different agents)
 - [ ] Custom agent plugin system
